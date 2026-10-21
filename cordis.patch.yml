@@ -1,0 +1,3 @@
+- insert:
+    - id: conversation-manager
+      name: '@local/dsh-conversation-manager'
