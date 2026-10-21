@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
       unarchive: '取消归档',
       hideAction: '从管理界面隐藏（不会删除会话）',
       hiddenCount: '已从此管理界面隐藏 {count} 条对话',
-      restoreAll: '恢复全部',
+      restoreOne: '恢复',
       hiddenLoadFailed: '读取隐藏记录失败：{message}',
       hideFailed: '隐藏失败：{message}',
       restoreFailed: '恢复隐藏记录失败：{message}',
@@ -48,7 +48,7 @@ window.__ModuleLoader__.load({
       unarchive: 'Unarchive',
       hideAction: 'Hide from this manager (does not delete the conversation)',
       hiddenCount: 'Hidden from this manager: {count}',
-      restoreAll: 'Restore all',
+      restoreOne: 'Restore',
       hiddenLoadFailed: 'Failed to read hidden records: {message}',
       hideFailed: 'Hide failed: {message}',
       restoreFailed: 'Failed to restore hidden records: {message}',
@@ -98,8 +98,16 @@ window.__ModuleLoader__.load({
 .dsh-cm-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
 .dsh-cm-button:disabled { opacity: 0.45; cursor: default; }
 .dsh-cm-button-warn { color: var(--dsw-alias-state-warn-primary); border-color: var(--dsw-alias-state-warn-primary); }
-.dsh-cm-foot { max-width: 880px; margin: 20px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
-.dsh-cm-foot-text { min-width: 0; }
+.dsh-cm-hidden { max-width: 880px; margin: 20px auto 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
+.dsh-cm-hidden-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: none; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; text-align: left; cursor: pointer; }
+.dsh-cm-hidden-toggle:hover { color: var(--dsw-alias-label-primary); }
+.dsh-cm-hidden-toggle:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+.dsh-cm-hidden-label { min-width: 0; }
+.dsh-cm-hidden-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--dsw-alias-border-l1); }
+.dsh-cm-hidden-row { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 8px 0 14px; }
+.dsh-cm-hidden-row + .dsh-cm-hidden-row { border-top: 1px solid var(--dsw-alias-border-l1); }
+.dsh-cm-hidden-title { flex: 1; min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+.dsh-cm-restore-button { flex: none; padding: 3px 8px; }
 @media (max-width: 640px) { .dsh-cm-page { padding: 20px 12px 32px; } .dsh-cm-group-head { flex-direction: column; gap: 2px; } }
 `;
 
@@ -200,6 +208,29 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function ChevronIcon({ open, size = 14 }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        'aria-hidden': 'true',
+        style: {
+          flex: 'none',
+          transform: open ? 'rotate(90deg)' : 'none',
+          transition: 'transform .15s',
+        },
+      },
+        h('path', {
+          d: 'M6 3.5 10.5 8 6 12.5',
+          stroke: 'currentColor',
+          strokeWidth: 1.4,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        })
+      );
+    }
+
     function ConversationManagerIcon({ size = 16 }) {
       return h('svg', {
         width: size,
@@ -237,6 +268,7 @@ window.__ModuleLoader__.load({
       const [actionError, setActionError] = React.useState(null);
       const [stopPrompt, setStopPrompt] = React.useState(null);
       const [hidden, setHidden] = React.useState(loadHiddenSessions);
+      const [hiddenOpen, setHiddenOpen] = React.useState(false);
       const [storageError, setStorageError] = React.useState(null);
 
       const currentId = React.useMemo(() => {
@@ -365,11 +397,14 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const restoreAll = () => {
+      const restoreHidden = (id) => {
+        const next = new Set(hidden.ids);
+        next.delete(id);
         try {
-          window.localStorage.setItem(HIDDEN_STORAGE_KEY, '[]');
-          setHidden({ ids: new Set(), error: null });
+          window.localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(Array.from(next)));
+          setHidden({ ids: next, error: null });
           setStorageError(null);
+          if (next.size === 0) setHiddenOpen(false);
         } catch (error) {
           setStorageError({ key: 'restoreFailed', message: errorMessage(error) });
         }
@@ -389,11 +424,32 @@ window.__ModuleLoader__.load({
       const storageErrorBanner = storageError === null
         ? null
         : h('div', { className: 'dsh-cm-error', role: 'alert' }, t(storageError.key, { message: storageError.message }));
-      const hiddenFooter = hidden.ids.size === 0
+      const hiddenSection = hidden.ids.size === 0
         ? null
-        : h('div', { className: 'dsh-cm-foot' },
-            h('span', { className: 'dsh-cm-foot-text' }, t('hiddenCount', { count: hidden.ids.size })),
-            h('button', { type: 'button', className: 'dsh-cm-button', onClick: restoreAll }, t('restoreAll'))
+        : h('section', { className: 'dsh-cm-hidden' },
+            h('button', {
+              type: 'button',
+              className: 'dsh-cm-hidden-toggle',
+              'aria-expanded': hiddenOpen ? 'true' : 'false',
+              onClick: () => setHiddenOpen((open) => !open),
+            },
+              h('span', { className: 'dsh-cm-hidden-label' }, t('hiddenCount', { count: hidden.ids.size })),
+              h(ChevronIcon, { open: hiddenOpen })
+            ),
+            hiddenOpen ? h('ul', { className: 'dsh-cm-hidden-list' }, Array.from(hidden.ids).map((id) => {
+              const row = sessionRows[id];
+              const title = row === undefined ? id : (row.title || t('unnamed'));
+              const archived = archivedIds.includes(id);
+              return h('li', { key: id, className: 'dsh-cm-hidden-row' },
+                h('span', { className: 'dsh-cm-hidden-title', title }, title),
+                archived ? h('span', { className: 'dsh-cm-badge' }, t('archived')) : null,
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-cm-button dsh-cm-restore-button',
+                  onClick: () => restoreHidden(id),
+                }, t('restoreOne'))
+              );
+            })) : null
           );
 
       let body;
@@ -433,14 +489,14 @@ window.__ModuleLoader__.load({
                     'aria-busy': busy ? 'true' : undefined,
                     onClick: () => requestArchive(row),
                   }, row.archived ? h(UnarchiveIcon, { size: 16 }) : h(ArchiveIcon, { size: 16 })),
-                  h('button', {
+                  row.archived ? h('button', {
                     type: 'button',
                     className: 'dsh-cm-icon-button',
                     'aria-label': t('hideAction'),
                     title: t('hideAction'),
                     disabled: busy,
                     onClick: () => hideSession(row),
-                  }, h(TrashIcon, { size: 16 }))
+                  }, h(TrashIcon, { size: 16 })) : null
                 )
               ),
               promptOpen ? h('div', { className: 'dsh-cm-stop', role: 'status' },
@@ -479,7 +535,7 @@ window.__ModuleLoader__.load({
         actionErrorBanner,
         storageErrorBanner,
         body,
-        hiddenFooter
+        hiddenSection
       );
     }
 
