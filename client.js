@@ -489,14 +489,14 @@ window.__ModuleLoader__.load({
                     'aria-busy': busy ? 'true' : undefined,
                     onClick: () => requestArchive(row),
                   }, row.archived ? h(UnarchiveIcon, { size: 16 }) : h(ArchiveIcon, { size: 16 })),
-                  h('button', {
+                  row.archived ? h('button', {
                     type: 'button',
                     className: 'dsh-cm-icon-button',
                     'aria-label': t('hideAction'),
                     title: t('hideAction'),
                     disabled: busy,
                     onClick: () => hideSession(row),
-                  }, h(TrashIcon, { size: 16 }))
+                  }, h(TrashIcon, { size: 16 })) : null
                 )
               ),
               promptOpen ? h('div', { className: 'dsh-cm-stop', role: 'status' },
