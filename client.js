@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
 
     const NS = 'conversationManager';
     const PANEL_ID = 'conversation-manager';
+    const HIDDEN_STORAGE_KEY = 'dsh-conversation-manager.hidden-sessions.v1';
 
     const zh = {
       panel: '对话管理',
@@ -17,6 +18,12 @@ window.__ModuleLoader__.load({
       archived: '已归档',
       archive: '归档',
       unarchive: '取消归档',
+      hideAction: '从管理界面隐藏（不会删除会话）',
+      hiddenCount: '已从此管理界面隐藏 {count} 条对话',
+      restoreAll: '恢复全部',
+      hiddenLoadFailed: '读取隐藏记录失败：{message}',
+      hideFailed: '隐藏失败：{message}',
+      restoreFailed: '恢复隐藏记录失败：{message}',
       unnamed: '未命名',
       empty: '暂无对话',
       loading: '正在加载对话…',
@@ -39,6 +46,12 @@ window.__ModuleLoader__.load({
       archived: 'Archived',
       archive: 'Archive',
       unarchive: 'Unarchive',
+      hideAction: 'Hide from this manager (does not delete the conversation)',
+      hiddenCount: 'Hidden from this manager: {count}',
+      restoreAll: 'Restore all',
+      hiddenLoadFailed: 'Failed to read hidden records: {message}',
+      hideFailed: 'Hide failed: {message}',
+      restoreFailed: 'Failed to restore hidden records: {message}',
       unnamed: 'Untitled',
       empty: 'No conversations',
       loading: 'Loading conversations…',
@@ -68,6 +81,7 @@ window.__ModuleLoader__.load({
 .dsh-cm-row-title { flex: 1; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 .dsh-cm-row-archived .dsh-cm-row-title { color: var(--dsw-alias-label-secondary); }
 .dsh-cm-badge { flex: none; padding: 0 6px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 17px; }
+.dsh-cm-row-actions { flex: none; display: flex; align-items: center; gap: 2px; }
 .dsh-cm-icon-button { flex: none; width: 28px; height: 28px; padding: 0; border: none; border-radius: var(--dsw-radius-sm, 6px); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .dsh-cm-icon-button:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
 .dsh-cm-icon-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
@@ -84,6 +98,8 @@ window.__ModuleLoader__.load({
 .dsh-cm-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
 .dsh-cm-button:disabled { opacity: 0.45; cursor: default; }
 .dsh-cm-button-warn { color: var(--dsw-alias-state-warn-primary); border-color: var(--dsw-alias-state-warn-primary); }
+.dsh-cm-foot { max-width: 880px; margin: 20px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
+.dsh-cm-foot-text { min-width: 0; }
 @media (max-width: 640px) { .dsh-cm-page { padding: 20px 12px 32px; } .dsh-cm-group-head { flex-direction: column; gap: 2px; } }
 `;
 
@@ -98,6 +114,27 @@ window.__ModuleLoader__.load({
       if (error && typeof error.message === 'string' && error.message !== '') return error.message;
       if (typeof error === 'string' && error !== '') return error;
       return 'unknown error';
+    }
+
+    function loadHiddenSessions() {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) {
+          return { ids: new Set(), error: 'localStorage is unavailable' };
+        }
+        const raw = window.localStorage.getItem(HIDDEN_STORAGE_KEY);
+        if (raw === null || raw === '') return { ids: new Set(), error: null };
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+          return { ids: new Set(), error: 'stored hidden-session value is not an array' };
+        }
+        const ids = new Set();
+        for (const value of parsed) {
+          if (typeof value === 'string' && value !== '') ids.add(value);
+        }
+        return { ids, error: null };
+      } catch (error) {
+        return { ids: new Set(), error: errorMessage(error) };
+      }
     }
 
     function workspaceTitle(workspace, t) {
@@ -145,6 +182,24 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function TrashIcon({ size = 16 }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        'aria-hidden': 'true',
+      },
+        h('path', {
+          d: 'M3.5 4.5h9M6.5 4.5V3h3v1.5M4.5 4.5l.6 8h5.8l.6-8M6.5 7v3.5M9.5 7v3.5',
+          stroke: 'currentColor',
+          strokeWidth: 1.25,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+        })
+      );
+    }
+
     function ConversationManagerIcon({ size = 16 }) {
       return h('svg', {
         width: size,
@@ -181,6 +236,8 @@ window.__ModuleLoader__.load({
       const [busyId, setBusyId] = React.useState(null);
       const [actionError, setActionError] = React.useState(null);
       const [stopPrompt, setStopPrompt] = React.useState(null);
+      const [hidden, setHidden] = React.useState(loadHiddenSessions);
+      const [storageError, setStorageError] = React.useState(null);
 
       const currentId = React.useMemo(() => {
         const rows = Object.values(sessionRows);
@@ -192,6 +249,7 @@ window.__ModuleLoader__.load({
 
       const groups = React.useMemo(() => {
         const archived = new Set(archivedIds);
+        const hiddenIds = hidden.ids;
         const seen = new Set();
 
         const isVisible = (id) => {
@@ -203,8 +261,9 @@ window.__ModuleLoader__.load({
           const active = [];
           const archivedRows = [];
           for (const id of ids) {
-            if (seen.has(id) || !isVisible(id)) continue;
+            if (seen.has(id)) continue;
             seen.add(id);
+            if (hiddenIds.has(id) || !isVisible(id)) continue;
             const row = sessionRows[id];
             const item = {
               id,
@@ -256,7 +315,7 @@ window.__ModuleLoader__.load({
           });
         }
         return result;
-      }, [archivedIds, currentId, sessionOrder, sessionRows, t, workspaceItems]);
+      }, [archivedIds, currentId, hidden.ids, sessionOrder, sessionRows, t, workspaceItems]);
 
       const runArchive = React.useCallback(async (row, options) => {
         setActionError(null);
@@ -293,14 +352,49 @@ window.__ModuleLoader__.load({
         runArchive(row, { stopActivity: true });
       };
 
+      const hideSession = (row) => {
+        const next = new Set(hidden.ids);
+        next.add(row.id);
+        setStopPrompt(null);
+        try {
+          window.localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(Array.from(next)));
+          setHidden({ ids: next, error: null });
+          setStorageError(null);
+        } catch (error) {
+          setStorageError({ key: 'hideFailed', message: errorMessage(error) });
+        }
+      };
+
+      const restoreAll = () => {
+        try {
+          window.localStorage.setItem(HIDDEN_STORAGE_KEY, '[]');
+          setHidden({ ids: new Set(), error: null });
+          setStorageError(null);
+        } catch (error) {
+          setStorageError({ key: 'restoreFailed', message: errorMessage(error) });
+        }
+      };
+
       const loading = workspacePhase === 'pending' || sessionPhase === 'pending';
       const loadError = workspaceState === 'error' ? workspaceError : undefined;
       const loadErrorBanner = loadError !== undefined && groups.length > 0
         ? h('div', { className: 'dsh-cm-error', role: 'alert' }, t('loadFailed', { message: errorMessage(loadError) }))
         : null;
+      const hiddenLoadErrorBanner = hidden.error === null
+        ? null
+        : h('div', { className: 'dsh-cm-error', role: 'alert' }, t('hiddenLoadFailed', { message: hidden.error }));
       const actionErrorBanner = actionError === null
         ? null
         : h('div', { className: 'dsh-cm-error', role: 'alert' }, t(actionError.key, { message: actionError.message }));
+      const storageErrorBanner = storageError === null
+        ? null
+        : h('div', { className: 'dsh-cm-error', role: 'alert' }, t(storageError.key, { message: storageError.message }));
+      const hiddenFooter = hidden.ids.size === 0
+        ? null
+        : h('div', { className: 'dsh-cm-foot' },
+            h('span', { className: 'dsh-cm-foot-text' }, t('hiddenCount', { count: hidden.ids.size })),
+            h('button', { type: 'button', className: 'dsh-cm-button', onClick: restoreAll }, t('restoreAll'))
+          );
 
       let body;
       if (loading && groups.length === 0) {
@@ -329,15 +423,25 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dsh-cm-row-main' },
                 h('span', { className: 'dsh-cm-row-title', title: row.title }, row.title),
                 row.archived ? h('span', { className: 'dsh-cm-badge' }, t('archived')) : null,
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-cm-icon-button',
-                  'aria-label': row.archived ? t('unarchive') : t('archive'),
-                  title: row.archived ? t('unarchive') : t('archive'),
-                  disabled: busy,
-                  'aria-busy': busy ? 'true' : undefined,
-                  onClick: () => requestArchive(row),
-                }, row.archived ? h(UnarchiveIcon, { size: 16 }) : h(ArchiveIcon, { size: 16 }))
+                h('div', { className: 'dsh-cm-row-actions' },
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-cm-icon-button',
+                    'aria-label': row.archived ? t('unarchive') : t('archive'),
+                    title: row.archived ? t('unarchive') : t('archive'),
+                    disabled: busy,
+                    'aria-busy': busy ? 'true' : undefined,
+                    onClick: () => requestArchive(row),
+                  }, row.archived ? h(UnarchiveIcon, { size: 16 }) : h(ArchiveIcon, { size: 16 })),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsh-cm-icon-button',
+                    'aria-label': t('hideAction'),
+                    title: t('hideAction'),
+                    disabled: busy,
+                    onClick: () => hideSession(row),
+                  }, h(TrashIcon, { size: 16 }))
+                )
               ),
               promptOpen ? h('div', { className: 'dsh-cm-stop', role: 'status' },
                 h('div', { className: 'dsh-cm-stop-text' },
@@ -371,8 +475,11 @@ window.__ModuleLoader__.load({
           h('p', { className: 'dsh-cm-subtitle' }, t('subtitle'))
         ),
         loadErrorBanner,
+        hiddenLoadErrorBanner,
         actionErrorBanner,
-        body
+        storageErrorBanner,
+        body,
+        hiddenFooter
       );
     }
 
