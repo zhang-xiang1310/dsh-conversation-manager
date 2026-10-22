@@ -4,30 +4,22 @@
  * Owns the `/dsh-cm/api` JSON routes the Client page reads and mutates through.
  * Hiding a conversation writes a row with `deleted = 1`; restoring flips it back
  * to `0`. Rows are never removed. The database lives under
- * `$DSH_HOME/plugin-data/records.db`, shared with the issue-list bundle (each
- * owns its own table).
+ * `$DSH_HOME/plugin-data/records.db`, shared with the issue-list bundle, which
+ * owns its own tables. Schema, ownership and version handling live in
+ * `./store.js`.
  */
 
-import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+
+import { openHiddenStore } from './store.js'
 
 export const inject = ['webServer']
 
 const API_PREFIX = '/dsh-cm/api'
 const API_MATCH = '/dsh-cm/api/'
 const MAX_BODY_BYTES = 4 * 1024 * 1024
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS hidden_sessions (
-  session_id TEXT PRIMARY KEY,
-  created_at INTEGER NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0,
-  deleted_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS hidden_sessions_deleted ON hidden_sessions (deleted);
-`
 
 /* ------------------------------------------------------------------ *
  * Wire helpers (same conventions as every other /xxx/api bundle route).
@@ -133,30 +125,9 @@ function requireSessionId(payload) {
 export function apply(ctx) {
   const target = databasePath()
   mkdirSync(dirname(target), { recursive: true })
-  const db = new DatabaseSync(target)
-  db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA busy_timeout = 3000')
-  db.exec(SCHEMA)
+  const store = openHiddenStore(target)
 
-  ctx.effect(
-    () => () => {
-      try {
-        db.close()
-      } catch {
-        /* already closed */
-      }
-    },
-    'conversation-manager: database',
-  )
-
-  const selectHidden = db.prepare('SELECT session_id FROM hidden_sessions WHERE deleted = 1 ORDER BY deleted_at, session_id')
-  const hide = db.prepare(
-    'INSERT INTO hidden_sessions (session_id, created_at, deleted, deleted_at) VALUES (?, ?, 1, ?) ON CONFLICT(session_id) DO UPDATE SET deleted = 1, deleted_at = excluded.deleted_at',
-  )
-  const restore = db.prepare('UPDATE hidden_sessions SET deleted = 0, deleted_at = ? WHERE session_id = ? AND deleted = 1')
-  const importHidden = db.prepare(
-    'INSERT OR IGNORE INTO hidden_sessions (session_id, created_at, deleted, deleted_at) VALUES (?, ?, 1, ?)',
-  )
+  ctx.effect(() => () => store.close(), 'conversation-manager: database')
 
   ctx.effect(
     () =>
@@ -182,32 +153,19 @@ export function apply(ctx) {
             const payload = await readJsonBody(req)
             let value
             switch (method) {
-              case 'list': {
-                value = { ids: selectHidden.all().map(row => row.session_id) }
+              case 'list':
+                value = { ids: store.list() }
                 break
-              }
-              case 'hide': {
-                const sessionId = requireSessionId(payload)
-                hide.run(sessionId, Date.now(), Date.now())
+              case 'hide':
+                store.hide(requireSessionId(payload))
                 value = { hidden: true }
                 break
-              }
-              case 'restore': {
-                const sessionId = requireSessionId(payload)
-                value = { restored: Number(restore.run(Date.now(), sessionId).changes) }
+              case 'restore':
+                value = { restored: store.restore(requireSessionId(payload)) }
                 break
-              }
-              case 'import': {
-                const ids = Array.isArray(payload.ids) ? payload.ids : []
-                const now = Date.now()
-                let imported = 0
-                for (const raw of ids) {
-                  if (typeof raw !== 'string' || raw.trim() === '') continue
-                  imported += Number(importHidden.run(raw, now, now).changes)
-                }
-                value = { imported }
+              case 'import':
+                value = { imported: store.importMissing(Array.isArray(payload.ids) ? payload.ids : []) }
                 break
-              }
               default:
                 throw new ApiError('not-found', `unknown conversation-manager API method "${method}"`, 404)
             }
