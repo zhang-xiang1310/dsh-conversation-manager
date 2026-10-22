@@ -124,24 +124,61 @@ window.__ModuleLoader__.load({
       return 'unknown error';
     }
 
-    function loadHiddenSessions() {
+    async function callApi(method, payload) {
+      let response;
+      try {
+        response = await fetch('/dsh-cm/api/' + method, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload ?? {}),
+        });
+      } catch (error) {
+        throw new Error('无法连接对话管理服务：' + errorMessage(error));
+      }
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      if (!response.ok || body === null || body.ok !== true) {
+        const reason = body !== null && body.error && typeof body.error.message === 'string'
+          ? body.error.message
+          : 'HTTP ' + response.status;
+        throw new Error(reason);
+      }
+      return body.value;
+    }
+
+    /** Only read once, to migrate the pre-database hidden ids; never written again. */
+    function readLegacyHidden() {
       try {
         if (typeof window === 'undefined' || !window.localStorage) {
-          return { ids: new Set(), error: 'localStorage is unavailable' };
+          return { ids: [], error: 'localStorage is unavailable' };
         }
         const raw = window.localStorage.getItem(HIDDEN_STORAGE_KEY);
-        if (raw === null || raw === '') return { ids: new Set(), error: null };
+        if (raw === null || raw === '') return { ids: [], error: null };
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) {
-          return { ids: new Set(), error: 'stored hidden-session value is not an array' };
+          return { ids: [], error: 'stored hidden-session value is not an array' };
         }
-        const ids = new Set();
+        const ids = [];
         for (const value of parsed) {
-          if (typeof value === 'string' && value !== '') ids.add(value);
+          if (typeof value === 'string' && value !== '') ids.push(value);
         }
         return { ids, error: null };
       } catch (error) {
-        return { ids: new Set(), error: errorMessage(error) };
+        return { ids: [], error: errorMessage(error) };
+      }
+    }
+
+    function clearLegacyHidden() {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.removeItem(HIDDEN_STORAGE_KEY);
+        }
+      } catch {
+        /* storage unavailable */
       }
     }
 
@@ -267,9 +304,36 @@ window.__ModuleLoader__.load({
       const [busyId, setBusyId] = React.useState(null);
       const [actionError, setActionError] = React.useState(null);
       const [stopPrompt, setStopPrompt] = React.useState(null);
-      const [hidden, setHidden] = React.useState(loadHiddenSessions);
+      const [hidden, setHidden] = React.useState({ ids: new Set(), error: null });
+      const [hiddenPhase, setHiddenPhase] = React.useState('pending');
       const [hiddenOpen, setHiddenOpen] = React.useState(false);
       const [storageError, setStorageError] = React.useState(null);
+
+      React.useEffect(() => {
+        let cancelled = false;
+        (async () => {
+          try {
+            const legacy = readLegacyHidden();
+            if (legacy.ids.length > 0) {
+              await callApi('import', { ids: legacy.ids });
+              clearLegacyHidden();
+            } else if (legacy.error === null) {
+              clearLegacyHidden();
+            }
+            const value = await callApi('list', {});
+            if (cancelled) return;
+            setHidden({ ids: new Set(Array.isArray(value.ids) ? value.ids : []), error: legacy.error });
+            setHiddenPhase('ready');
+          } catch (error) {
+            if (cancelled) return;
+            setHidden((prev) => ({ ids: prev.ids, error: errorMessage(error) }));
+            setHiddenPhase('ready');
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }, []);
 
       const currentId = React.useMemo(() => {
         const rows = Object.values(sessionRows);
@@ -384,33 +448,38 @@ window.__ModuleLoader__.load({
         runArchive(row, { stopActivity: true });
       };
 
-      const hideSession = (row) => {
-        const next = new Set(hidden.ids);
+      const hideSession = async (row) => {
+        const previous = hidden.ids;
+        const next = new Set(previous);
         next.add(row.id);
         setStopPrompt(null);
+        setHidden({ ids: next, error: null });
+        setStorageError(null);
         try {
-          window.localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(Array.from(next)));
-          setHidden({ ids: next, error: null });
-          setStorageError(null);
+          await callApi('hide', { sessionId: row.id });
         } catch (error) {
+          setHidden({ ids: previous, error: null });
           setStorageError({ key: 'hideFailed', message: errorMessage(error) });
         }
       };
 
-      const restoreHidden = (id) => {
-        const next = new Set(hidden.ids);
+      const restoreHidden = async (id) => {
+        const previous = hidden.ids;
+        const next = new Set(previous);
         next.delete(id);
+        setHidden({ ids: next, error: null });
+        setStorageError(null);
+        if (next.size === 0) setHiddenOpen(false);
         try {
-          window.localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(Array.from(next)));
-          setHidden({ ids: next, error: null });
-          setStorageError(null);
-          if (next.size === 0) setHiddenOpen(false);
+          await callApi('restore', { sessionId: id });
         } catch (error) {
+          setHidden({ ids: previous, error: null });
+          if (previous.size > 0) setHiddenOpen(true);
           setStorageError({ key: 'restoreFailed', message: errorMessage(error) });
         }
       };
 
-      const loading = workspacePhase === 'pending' || sessionPhase === 'pending';
+      const loading = workspacePhase === 'pending' || sessionPhase === 'pending' || hiddenPhase === 'pending';
       const loadError = workspaceState === 'error' ? workspaceError : undefined;
       const loadErrorBanner = loadError !== undefined && groups.length > 0
         ? h('div', { className: 'dsh-cm-error', role: 'alert' }, t('loadFailed', { message: errorMessage(loadError) }))
