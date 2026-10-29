@@ -74,7 +74,7 @@ export function openHiddenStore(file) {
   migrate(db)
 
   const selectHidden = db.prepare(
-    'SELECT session_id FROM hidden_sessions WHERE deleted = 1 ORDER BY deleted_at, session_id',
+    'SELECT session_id FROM hidden_sessions WHERE deleted = 1 ORDER BY deleted_at DESC, session_id',
   )
   const hideStmt = db.prepare(
     'INSERT INTO hidden_sessions (session_id, created_at, deleted, deleted_at) VALUES (?, ?, 1, ?) ON CONFLICT(session_id) DO UPDATE SET deleted = 1, deleted_at = excluded.deleted_at',

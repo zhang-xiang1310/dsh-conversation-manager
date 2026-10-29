@@ -103,7 +103,7 @@ window.__ModuleLoader__.load({
 .dsh-cm-hidden-toggle:hover { color: var(--dsw-alias-label-primary); }
 .dsh-cm-hidden-toggle:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
 .dsh-cm-hidden-label { min-width: 0; }
-.dsh-cm-hidden-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--dsw-alias-border-l1); }
+.dsh-cm-hidden-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--dsw-alias-border-l1); max-height: 280px; overflow-y: auto; overscroll-behavior: contain; }
 .dsh-cm-hidden-row { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 8px 0 14px; }
 .dsh-cm-hidden-row + .dsh-cm-hidden-row { border-top: 1px solid var(--dsw-alias-border-l1); }
 .dsh-cm-hidden-title { flex: 1; min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
@@ -450,8 +450,8 @@ window.__ModuleLoader__.load({
 
       const hideSession = async (row) => {
         const previous = hidden.ids;
-        const next = new Set(previous);
-        next.add(row.id);
+        const next = new Set([row.id]);
+        for (const id of previous) next.add(id);
         setStopPrompt(null);
         setHidden({ ids: next, error: null });
         setStorageError(null);
